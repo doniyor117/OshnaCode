@@ -36,7 +36,6 @@ ptyprocess
 pure_eval
 pyasn1==0.6.3
 pyasn1_modules==0.4.2
-PyAudio==0.2.14
 pycparser==3.0
 pydantic==2.13.2
 pydantic_core==2.46.2

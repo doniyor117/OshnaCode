@@ -6,6 +6,10 @@ from dotenv import load_dotenv
 from google.genai import types
 from tools import AVAILABLE_TOOLS
 from config import system_prompt
+import os
+import glob
+from datetime import datetime
+import json
 
 load_dotenv()
 
@@ -16,6 +20,9 @@ class OshnaAgent:
         self.tools = AVAILABLE_TOOLS
         self.system_prompt = system_prompt
         self.max_history_chars = 200000
+        self.session_dir = "conversations"
+        self.current_session_file = None
+        os.makedirs(self.session_dir, exist_ok=True)
         
     def get_user_input(self) -> str:
         try:
@@ -98,7 +105,58 @@ class OshnaAgent:
             # Recalculate
             current_length = sum(len(str(part)) for turn in self.conversation for part in turn.parts)
 
+    def setup_session(self):
+        """Finds existing sessions and prompts the user to load or start fresh."""
+        sessions = sorted(glob.glob(f"{self.session_dir}/*.json"), reverse=True)
+        
+        if sessions:
+            print(colored("\n[ existing sessions found ]", "cyan"))
+            # show the 5 most recent sessions
+            for i, s in enumerate(sessions[:5]): 
+                print(f"  [{i}] {os.path.basename(s)}")
+            print("  [n] start a new session")
+            
+            choice = input(colored("\nchoose a session (default 'n'): ", "blue")).strip().lower()
+            if choice.isdigit() and int(choice) < len(sessions):
+                self.current_session_file = sessions[int(choice)]
+                self.load_session()
+                return
+                
+        # Start new session
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.current_session_file = os.path.join(self.session_dir, f"session_{timestamp}.json")
+        print(colored(f"\nsystem: starting new session -> {os.path.basename(self.current_session_file)}", "grey"))
+
+    def load_session(self):
+        """Reads the JSON and re-hydrates the Pydantic schema objects."""
+        try:
+            with open(self.current_session_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Re-hydrate the raw dictionaries back into types.Content objects
+            self.conversation = [types.Content.model_validate(turn) for turn in data]
+            print(colored(f"\nsystem: loaded session -> {os.path.basename(self.current_session_file)}", "green"))
+            
+        except Exception as e:
+            print(colored(f"\nsystem error: failed to load session. starting fresh. ({e})", "red"))
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.current_session_file = os.path.join(self.session_dir, f"session_{timestamp}.json")
+
+    def save_session(self):
+            """Serializes the conversation array and dumps it to disk."""
+            if not self.current_session_file:
+                return
+            try:
+                # FIX: Added mode='json' so Pydantic handles bytes/enums correctly
+                data = [turn.model_dump(mode='json', exclude_none=True) for turn in self.conversation]
+                
+                with open(self.current_session_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2)
+            except Exception as e:
+                print(colored(f"\nsystem error: could not save session: {e}", "red"))
+
     def run(self):
+        self.setup_session()
         print(colored("Agent Initialized. Type 'exit' to quit.", "cyan"))
         read_user_input = True
         
@@ -190,6 +248,8 @@ class OshnaAgent:
                 read_user_input = False
             else:
                 read_user_input = True
+
+            self.save_session()
 
 if __name__=="__main__":
     agent = OshnaAgent()

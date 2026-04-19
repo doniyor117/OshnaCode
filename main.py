@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from google import genai
 from termcolor import colored
 from dotenv import load_dotenv

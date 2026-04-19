@@ -1,6 +1,7 @@
 import os
 from pydantic import BaseModel, Field, ValidationError
 from typing import Optional
+import inspect
 
 class ToolDefinitionSchema:
     def __init__(self, name, description, input_schema, function):
@@ -18,7 +19,7 @@ class ListDirectoryInput(BaseModel):
 
 class EditFileInput(BaseModel):
     path: str = Field(
-        description="The relative path to the file. If the file or directory does not exist, it will be automatically created."
+        description="The relative path to the file."
     )
     old_string: str = Field(
         description=(
@@ -29,7 +30,7 @@ class EditFileInput(BaseModel):
         )
     )
     new_string: str = Field(
-        description="The exact new string that will overwrite the old_string. Ensure proper spacing, newlines, and indentation are maintained."
+        description="The exact new string that will overwrite the old_string."
     )
 
 
@@ -85,17 +86,18 @@ def edit_file(**kwargs):
             if old_str not in content:
                 raise ValueError("The old_str provided was not found in the file. Check for exact spacing and indentation.")
             
-            occurences = content.count(old_str)
+            occurrences = content.count(old_str)
 
-            if occurences > 1:
+            if occurrences > 1:
                 raise ValueError(f"Found {occurrences} instances of old_str. Provide more surrounding lines of code to make the match globally unique.")
             
             new_content = content.replace(old_str, new_str)
 
-            temp_file_path = file_path.with_stem(f"{file_path.stem}_temp")
+            temp_file_path = file_path.with_name(f"{file_path.name}.tmp")
             temp_file_path.write_text(new_content)
-
             os.replace(temp_file_path.resolve(), file_path.resolve())
+
+            return f"Successfully updated {file_path}"
 
     except ValidationError as e:
         return f"Schema Error: {e}"
@@ -119,11 +121,21 @@ list_dir_def = ToolDefinitionSchema(
 
 edit_file_def = ToolDefinitionSchema(
     name="edit_file",
-    description=(
-        "Make edits to a file by replacing a specific block of text. "
-        "Use this instead of rewriting entire files to save context. "
-        "You must accurately provide the old text to be replaced and the new text to insert."
-    ),
+    description=inspect.clean_doc("""
+        Edits an existing file or create a new one. Do not rewrite the entire file unless necessary.
+        
+        TO EDIT AN EXISTING FILE:
+        - You must replace a specific block of text. 
+        - CRITICAL: 'old_str' must be globally unique within the file. You MUST include surrounding lines of code (like function definitions) to guarantee a unique match.
+        - 'old_str' must exactly match the existing file content, including all spaces, newlines, and indentation.
+        
+        TO CREATE A NEW FILE:
+        - If the file path does not exist, it will be created automatically.
+        - You MUST pass an empty string ("") for 'old_str'.
+        - Pass the complete content for the new file in 'new_string'.
+        
+        RULES: 'old_str' and 'new_str' must never be identical.
+    """),
     input_schema=EditFileInput.model_json_schema(),
     function=edit_file
 )

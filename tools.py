@@ -5,6 +5,12 @@ import inspect
 from pathlib import Path
 import shutil
 import re
+import subprocess
+try:
+    from tree_sitter import Language, Parser
+    HAS_TREESITTER = True
+except ImportError:
+    HAS_TREESITTER = False
 
 # tools to be implemented: cd, mv, cp and find or grep
 
@@ -20,6 +26,21 @@ def is_safe_path(target_path: str, root_dir: str = "."):
     root = Path(root_dir).resolve()
     target = Path(target_path).resolve()
     return root in target.parents or target == root
+
+def get_language_parser(extension: str):
+    """Dynamically loads the correct tree-sitter grammar based on file extension."""
+    try:
+        if extension == '.py':
+            import tree_sitter_python as tspython
+            return Language(tspython.language())
+        elif extension in ['.js', '.jsx']:
+            import tree_sitter_javascript as tsjavascript
+            return Language(tsjavascript.language())
+        # Add more languages here (e.g., Rust, Go, TS) as you pip install them
+        else:
+            return None
+    except ImportError:
+        return "MISSING_MODULE"
 
 
 class MakeDirInput(BaseModel):
@@ -74,6 +95,18 @@ class EditFileInput(BaseModel):
     start_line: int = Field(description="Line number to start replacing (1-indexed). Use -1 to append to the end of the file.")
     end_line: int = Field(description="Line number to end replacing (inclusive). Use -1 to replace from start_line to the end of the file. To insert without deleting, set end_line to start_line - 1.")
     new_content: str = Field(description="The exact new text to insert. Pass an empty string to delete the specified lines.")
+
+class ExecuteBashInput(BaseModel):
+    command: str = Field(description="The bash command to execute. Must be non-interactive.")
+
+class GitStatusInput(BaseModel):
+    directory: str = Field(description="Directory of the git repository. Defaults to current directory ('.').", default=".")
+
+class GitDiffInput(BaseModel):
+    target: str = Field(description="Target file to diff. Leave empty to diff the entire repository.", default="")
+
+class GetCodeSkeletonInput(BaseModel):
+    path: str = Field(description="Relative path of the source code file to analyze.")
 
 
 def make_dir(**kwargs):
@@ -341,6 +374,126 @@ def edit_file(**kwargs):
     except Exception as e:
         return f"Execution Error: {str(e)}"
 
+def execute_bash(**kwargs):
+    try:
+        valid_input = ExecuteBashInput(**kwargs)
+        
+        # Execute the command with a 90-second timeout
+        result = subprocess.run(
+            valid_input.command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=90
+        )
+        
+        # Combine stdout and stderr
+        output = result.stdout
+        if result.stderr:
+            output += f"\n--- STDERR ---\n{result.stderr}"
+            
+        if not output.strip():
+            return f"Command '{valid_input.command}' executed successfully with no output."
+            
+        return truncate_output(output) # Protects context window
+
+    except ValidationError as e:
+        return f"Schema Error: {e}"
+    except subprocess.TimeoutExpired:
+        return "Execution Error: Command timed out after 90 seconds. Ensure commands are non-interactive."
+    except Exception as e:
+        return f"Execution Error: {str(e)}"
+
+def get_git_status(**kwargs):
+    try:
+        valid_input = GitStatusInput(**kwargs)
+        result = subprocess.run(
+            ["git", "-C", valid_input.directory, "status"], 
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return f"Git Error: {result.stderr}"
+        return result.stdout
+    except Exception as e:
+        return f"Execution Error: {str(e)}"
+
+def get_git_diff(**kwargs):
+    try:
+        valid_input = GitDiffInput(**kwargs)
+        cmd = ["git", "diff"]
+        if valid_input.target:
+            cmd.append(valid_input.target)
+            
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        
+        if result.returncode != 0:
+            return f"Git Error: {result.stderr}"
+        if not result.stdout.strip():
+            return "No uncommitted changes."
+            
+        return truncate_output(result.stdout)
+    except Exception as e:
+        return f"Execution Error: {str(e)}"
+
+def get_code_skeleton(**kwargs):
+    if not HAS_TREESITTER:
+        return "Execution Error: tree-sitter is not installed. Please use execute_bash to run: pip install tree-sitter tree-sitter-python tree-sitter-javascript"
+
+    try:
+        valid_input = GetCodeSkeletonInput(**kwargs)
+        path = valid_input.path
+        
+        if not os.path.exists(path):
+            return f"Execution Error: File '{path}' does not exist."
+
+        _, ext = os.path.splitext(path)
+        lang = get_language_parser(ext)
+        
+        if lang == "MISSING_MODULE":
+            return f"Execution Error: The tree-sitter grammar for '{ext}' is not installed. Use execute_bash to pip install it (e.g., tree-sitter-python)."
+        if lang is None:
+            return f"Execution Error: File extension '{ext}' is not currently supported by the get_code_skeleton tool."
+
+        with open(path, 'rb') as f:
+            source_bytes = f.read()
+
+        parser = Parser(lang)
+        tree = parser.parse(source_bytes)
+        
+        skeleton = []
+
+        # Generic recursive walker to support multiple languages without explicit queries
+        def walk_tree(node, depth=0):
+            # Look for structural nodes
+            if "definition" in node.type or "declaration" in node.type:
+                name = "Anonymous"
+                # Find the identifier (the name of the class/function)
+                for child in node.children:
+                    if child.type == "identifier" or child.type == "property_identifier":
+                        name = source_bytes[child.start_byte:child.end_byte].decode('utf-8')
+                        break
+                
+                # Format the output with indentation based on depth
+                indent = "    " * depth
+                skeleton.append(f"{indent}[{node.type}] {name}")
+                depth += 1 # Increase indentation for child nodes
+
+            # Recursively walk children
+            for child in node.children:
+                walk_tree(child, depth)
+
+        walk_tree(tree.root_node)
+
+        if not skeleton:
+            return "File parsed successfully, but no major structural blocks (classes/functions) were found."
+
+        return "\n".join(skeleton)
+
+    except ValidationError as e:
+        return f"Schema Error: {e}"
+    except Exception as e:
+        return f"Execution Error: {str(e)}"
+
 
 make_dir_def = ToolDefinitionSchema(
     name="make_dir",
@@ -433,6 +586,34 @@ edit_file_def = ToolDefinitionSchema(
     function=edit_file
 )
 
+execute_bash_def = ToolDefinitionSchema(
+    name="execute_bash",
+    description="Execute a bash command in the terminal. Use this to run scripts, install packages, or interact with git. Commands must be non-interactive.",
+    input_schema=ExecuteBashInput.model_json_schema(),
+    function=execute_bash
+)
+
+git_status_def = ToolDefinitionSchema(
+    name="get_git_status",
+    description="Run 'git status' to see modified, tracked, and untracked files.",
+    input_schema=GitStatusInput.model_json_schema(),
+    function=get_git_status
+)
+
+git_diff_def = ToolDefinitionSchema(
+    name="get_git_diff",
+    description="Run 'git diff' to see exact line changes in the repository. Use this to review your edits before declaring a task complete.",
+    input_schema=GitDiffInput.model_json_schema(),
+    function=get_git_diff
+)
+
+get_code_skeleton_def = ToolDefinitionSchema(
+    name="get_code_skeleton",
+    description="Reads a source code file and returns its architectural structure (classes, functions, methods) using tree-sitter. Supports Python and JavaScript. Use this to map out large files before editing.",
+    input_schema=GetCodeSkeletonInput.model_json_schema(),
+    function=get_code_skeleton
+)
+
 
 # ---------------------------------------------------------
 # EXPORT REGISTRY
@@ -448,5 +629,9 @@ AVAILABLE_TOOLS = [
     create_file_def,
     remove_file_def,
     read_file_def,
-    edit_file_def
+    edit_file_def,
+    execute_bash_def,
+    git_status_def,
+    git_diff_def,
+    get_code_skeleton_def
 ]

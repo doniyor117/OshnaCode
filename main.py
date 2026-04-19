@@ -3,6 +3,7 @@ from termcolor import colored
 from dotenv import load_dotenv
 from google.genai import types
 from tools import AVAILABLE_TOOLS
+from config import system_prompt
 
 load_dotenv()
 
@@ -11,7 +12,7 @@ class OshnaAgent:
         self.client = genai.Client()
         self.conversation = []
         self.tools = AVAILABLE_TOOLS
-        self.system_prompt = "You are a helpful assistant." 
+        self.system_prompt = system_prompt
         
     def get_user_input(self) -> str:
         try:
@@ -21,6 +22,24 @@ class OshnaAgent:
             return None
             
     def execute_function(self, call_id: str, name: str, args: dict) -> types.Part:
+        # HUMAN-IN-THE-LOOP SECURITY BOUNDARY
+        if name == "execute_bash":
+            command = args.get('command', 'UNKNOWN COMMAND')
+            print(colored(f"\n⚠️  WARNING: The agent wants to run a bash command:", "red", attrs=['bold']))
+            print(colored(f"   $ {command}", "yellow"))
+            
+            confirm = input(colored("Allow this command? [y/N]: ", "red")).strip().lower()
+            if confirm != 'y':
+                print(colored("System: Command execution denied by user.", "grey"))
+                # Return the denial directly to the LLM so it knows why it failed
+                return types.Part(
+                    function_response=types.FunctionResponse(
+                        id=call_id,
+                        name=name,
+                        response={"error": "The human user denied permission to execute this command. You must ask the user for an alternative approach."}
+                    )
+                )
+
         for tool in self.tools:
             if tool.name == name:
                 try:
@@ -84,6 +103,7 @@ class OshnaAgent:
                     config=types.GenerateContentConfig(
                         tools=[types.Tool(function_declarations=function_declarations)],
                         temperature=0.1,
+                        system_instruction=self.system_prompt,
                         max_output_tokens=8000
                     )
                 )

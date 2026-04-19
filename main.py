@@ -13,6 +13,7 @@ class OshnaAgent:
         self.conversation = []
         self.tools = AVAILABLE_TOOLS
         self.system_prompt = system_prompt
+        self.max_history_chars = 200000
         
     def get_user_input(self) -> str:
         try:
@@ -66,6 +67,34 @@ class OshnaAgent:
                 response={"error": f"Tool '{name}' is not defined."}
             )
         )
+    
+    def manage_context(self):
+        """
+        Calculates character heuristic and drops the oldest conversation turns.
+        Ensures tool responses are never orphaned without their preceding calls.
+        """
+        # Calculate approximate length by casting schema parts to strings
+        current_length = sum(len(str(part)) for turn in self.conversation for part in turn.parts)
+        
+        while current_length > self.max_history_chars and len(self.conversation) > 2:
+            # 1. Pop the oldest turn
+            dropped_turn = self.conversation.pop(0)
+            
+            # 2. Check for newly orphaned responses
+            # If we dropped a model turn containing a function_call, the NEW oldest turn 
+            # (index 0) is the user's function_response. It is now orphaned and MUST be dropped.
+            if dropped_turn.role == "model" and any(getattr(p, "function_call", None) for p in dropped_turn.parts):
+                if self.conversation and self.conversation[0].role == "user" and any(getattr(p, "function_response", None) for p in self.conversation[0].parts):
+                    self.conversation.pop(0)
+                    
+            # 3. Scrub mid-chain orphans
+            # Conversely, if we dropped a text prompt and the NEW oldest turn is a function_response,
+            # it means we started pruning in the middle of a tool chain. Keep popping until clean.
+            while self.conversation and self.conversation[0].role == "user" and any(getattr(p, "function_response", None) for p in self.conversation[0].parts):
+                self.conversation.pop(0)
+                
+            # Recalculate
+            current_length = sum(len(str(part)) for turn in self.conversation for part in turn.parts)
 
     def run(self):
         print(colored("Agent Initialized. Type 'exit' to quit.", "cyan"))
@@ -86,6 +115,8 @@ class OshnaAgent:
                         parts=[types.Part.from_text(text=user_input)]
                     )
                 )
+
+            self.manage_context()
 
             function_declarations = [
                 types.FunctionDeclaration(

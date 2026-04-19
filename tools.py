@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import re
 import subprocess
+from helper_functions import truncate_output
 try:
     from tree_sitter import Language, Parser
     HAS_TREESITTER = True
@@ -258,7 +259,7 @@ def read_file(**kwargs):
             raise ValueError("Permission Denied: Cannot operate outside of the project directory.")
         
         with open(input_path, "r") as rfile:
-            return rfile.read()
+            return truncate_output(rfile.read())
     except ValidationError as e:
         return f"Schema Error: {e}"
     except Exception as e:

@@ -24,7 +24,7 @@ Oshna can navigate and manipulate your project structure with precision:
 - **Seamless Resumption**: Load previous sessions to continue complex tasks without re-explaining the context.
 
 ## 🛠️ Tech Stack
-- **LLM**: `gemma-4-26b-a4b-it` (via Google GenAI)
+- **LLM**: `gemma-4-31b-it` (via Google GenAI)
 - **Schema Validation**: `Pydantic` for strict tool input/output typing.
 - **Parsing**: `tree-sitter` for multi-language AST analysis.
 - **Environment**: Python 3.10+
@@ -33,12 +33,14 @@ Oshna can navigate and manipulate your project structure with precision:
 
 ### 1. Clone the repo
 ```bash
-git clone <repo-url>
-cd oshna-code
+git clone https://github.com/doniyor117/OshnaCode
+cd OshnaCode
 ```
 
-### 2. Install Dependencies
+### 2. Create Python Environment and Install Dependencies
 ```bash
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 # Note: tree-sitter grammars may need additional installation depending on your OS
 ```

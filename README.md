@@ -39,7 +39,7 @@ cd OshnaCode
 
 ### 2. Create Python Environment and Install Dependencies
 ```bash
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 # Note: tree-sitter grammars may need additional installation depending on your OS

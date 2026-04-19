@@ -2,6 +2,7 @@ import os
 from pydantic import BaseModel, Field, ValidationError
 from typing import Optional
 import inspect
+from pathlib import Path
 
 class ToolDefinitionSchema:
     def __init__(self, name, description, input_schema, function):
@@ -21,7 +22,7 @@ class EditFileInput(BaseModel):
     path: str = Field(
         description="The relative path to the file."
     )
-    old_string: str = Field(
+    old_str: str = Field(
         description=(
             "The exact snippet of text you want to replace. "
             "CRITICAL: This string must be globally unique within the file. "
@@ -29,7 +30,7 @@ class EditFileInput(BaseModel):
             "If you are creating a new file from scratch, leave this as an empty string (\"\")."
         )
     )
-    new_string: str = Field(
+    new_str: str = Field(
         description="The exact new string that will overwrite the old_string."
     )
 
@@ -51,7 +52,7 @@ def list_dir(**kwargs):
         valid_input = ListDirectoryInput(**kwargs)
 
         entries_itr = os.scandir(valid_input.path)
-        return [{file.name: "file" if file.is_file() else "directory"} for file in entries_itr]
+        return str([{file.name: "file" if file.is_file() else "directory"} for file in entries_itr])
 
     except ValidationError as e:
         return f"Schema Error: {e}"
@@ -75,6 +76,7 @@ def edit_file(**kwargs):
 
             if old_str is None:
                 file_path.write_text(new_str)
+                return f"Successfully created new file at {file_path}"
             else:
                 raise ValueError("Given path for the file to be edited does not exist.")
         else:

@@ -1,9 +1,8 @@
-import json
 from google import genai
 from termcolor import colored
 from dotenv import load_dotenv
 from google.genai import types
-from tools import read_file_definition
+from tools import AVAILABLE_TOOLS
 
 load_dotenv()
 
@@ -11,7 +10,7 @@ class OshnaAgent:
     def __init__(self):
         self.client = genai.Client()
         self.conversation = []
-        self.tools = [read_file_definition]
+        self.tools = AVAILABLE_TOOLS
         self.system_prompt = "You are a helpful assistant." 
         
     def get_user_input(self) -> str:
@@ -22,35 +21,31 @@ class OshnaAgent:
             return None
             
     def execute_function(self, call_id: str, name: str, args: dict) -> types.Part:
-        """
-        Executes the matched function and returns a properly structured 
-        types.Part containing the FunctionResponse.
-        """
         for tool in self.tools:
             if tool.name == name:
                 try:
-                    # tools.py expects a JSON string input, so we dump the args dictionary
-                    args_json = json.dumps(args)
-                    result = tool.function(args_json)
-                    
-                    # The response must be a dictionary. We wrap the string result.
+                    # Pass the dictionary directly as keyword arguments
+                    result = tool.function(**args)
                     response_data = {"result": result}
                 except Exception as e:
-                    # Catch all execution errors and feed them back to the LLM
                     response_data = {"error": f"Execution failed: {str(e)}"}
                 
-                # Construct the formal function_response part, including the matching ID
-                return types.Part.from_function_response(
-                    id=call_id,
-                    name=name,
-                    response=response_data
+                # Construct the raw schema types directly to support the 'id' field
+                return types.Part(
+                    function_response=types.FunctionResponse(
+                        id=call_id,
+                        name=name,
+                        response=response_data
+                    )
                 )
                 
         # Fallback if the model hallucinates a tool name
-        return types.Part.from_function_response(
-            id=call_id,
-            name=name,
-            response={"error": f"Tool '{name}' is not defined."}
+        return types.Part(
+            function_response=types.FunctionResponse(
+                id=call_id,
+                name=name,
+                response={"error": f"Tool '{name}' is not defined."}
+            )
         )
 
     def run(self):
@@ -66,7 +61,6 @@ class OshnaAgent:
                 if not user_input:
                     continue
                     
-                # Append standard user text turn
                 self.conversation.append(
                     types.Content(
                         role="user", 
@@ -74,7 +68,6 @@ class OshnaAgent:
                     )
                 )
 
-            # Build the tool declarations dynamically
             function_declarations = [
                 types.FunctionDeclaration(
                     name=tool.name,
@@ -96,7 +89,7 @@ class OshnaAgent:
                 )
             except Exception as e:
                 print(colored(f"\nAPI Error: {e}", "red"))
-                self.conversation.pop() # Remove the failed prompt to allow retry
+                self.conversation.pop() 
                 read_user_input = True
                 continue
 
@@ -106,12 +99,9 @@ class OshnaAgent:
                 read_user_input = True
                 continue
             
-            # 1. Append the model's exact response to history immediately.
-            # This ensures both text and function_calls are recorded perfectly.
             model_content = response.candidates[0].content
             self.conversation.append(model_content)
 
-            # 2. Parse the parts to separate text from tool calls
             full_text = ""
             tool_calls = []
 
@@ -128,13 +118,11 @@ class OshnaAgent:
                 print(colored("Gemini: ", "yellow"), end="")
                 print(full_text)
 
-            # 3. If tools were called, execute them and format the response
             if tool_calls:
                 tool_response_parts = []
                 for tool_call in tool_calls:
                     print(colored(f"\n[System: Executing tool '{tool_call.name}']", "magenta"))
                     
-                    # Note: tool_call.args is a dict
                     response_part = self.execute_function(
                         call_id=tool_call.id,
                         name=tool_call.name,
@@ -142,16 +130,12 @@ class OshnaAgent:
                     )
                     tool_response_parts.append(response_part)
 
-                # Append the function responses as a new user turn
                 self.conversation.append(
                     types.Content(role="user", parts=tool_response_parts)
                 )
                 
-                # Loop continues immediately without waiting for user input 
-                # so the model can process the tool results.
                 read_user_input = False
             else:
-                # No tools called, wait for the next human input
                 read_user_input = True
 
 if __name__=="__main__":

@@ -10,12 +10,14 @@ import os
 import glob
 from datetime import datetime
 import json
+import sys
 
 load_dotenv()
 
 class OshnaAgent:
     def __init__(self):
         self.client = genai.Client()
+        self.model = "gemma-4-31b-it"
         self.conversation = []
         self.tools = AVAILABLE_TOOLS
         self.system_prompt = system_prompt
@@ -23,6 +25,9 @@ class OshnaAgent:
         self.session_dir = "conversations"
         self.current_session_file = None
         os.makedirs(self.session_dir, exist_ok=True)
+
+        if len(sys.argv) > 1:
+            self.model = sys.argv[1]
         
     def get_user_input(self) -> str:
         try:
@@ -189,7 +194,7 @@ class OshnaAgent:
 
             try:
                 response = self.client.models.generate_content(
-                    model="gemma-4-26b-a4b-it",
+                    model=self.model,
                     contents=self.conversation,
                     config=types.GenerateContentConfig(
                         tools=[types.Tool(function_declarations=function_declarations)],
